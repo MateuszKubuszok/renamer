@@ -41,10 +41,10 @@ final class App(files: Array[FileInfo]) {
         case Some(head) => Mode.MatchPreview(head)
         case None       => Mode.OutputEdit
       }
-    case Mode.MatchPreview(selected) =>
+    case current @ Mode.MatchPreview(selected) =>
       Results.nextMatch(selected) match {
         case Some(next) => Mode.MatchPreview(next)
-        case None       => Mode.OutputEdit
+        case None       => current
       }
   }
 
@@ -86,7 +86,7 @@ final class App(files: Array[FileInfo]) {
             valid = false
         }
       }
-      Results.update()
+      Results.updateMatches()
     }
 
     private def isSelected = mode == Mode.InputEdit
@@ -116,6 +116,7 @@ final class App(files: Array[FileInfo]) {
   object FormatOutput {
 
     private var rawPattern = ""
+    private var valid      = true
 
     def addChar(c: Char): Unit = {
       rawPattern += c
@@ -128,11 +129,24 @@ final class App(files: Array[FileInfo]) {
         update()
       }
 
-    var converter: (FileInfo => Path) = _.path
+    var converter: Converter = Converter.Noop
 
-    def update(): Unit =
-      // TODO
-      Results.update()
+    def update(): Unit = {
+      if (rawPattern.isEmpty) {
+        converter = Converter.Noop
+        valid = true
+      } else {
+        Converter.parse(rawPattern) match {
+          case Right(converter) =>
+            this.converter = converter
+            valid = true
+          case Left(error) =>
+            this.converter = Converter.Noop
+            valid = false
+        }
+      }
+      Results.updateMatches()
+    }
 
     def isSelected = mode == Mode.OutputEdit
 
@@ -196,7 +210,7 @@ final class App(files: Array[FileInfo]) {
 
     private var rows: Array[TableWidget.Row] = null
 
-    def update(): Unit = {
+    def updateMatches(): Unit = {
       matches = files
         .filter(f => FilterInput.pattern.findFirstIn(f.name).isDefined)
         .map { case fi @ FileInfo(name, path, file) =>
@@ -205,7 +219,10 @@ final class App(files: Array[FileInfo]) {
           Match(fi, output, ListMap.empty)
         }
         .toArray
+      updateRows()
+    }
 
+    def updateRows(): Unit = {
       val selectedFile = mode match {
         case Mode.MatchPreview(selected) => selected
         case _                           => null
@@ -259,9 +276,13 @@ final class App(files: Array[FileInfo]) {
   def handle(jni: CrosstermJni): Unit = jni.read() match {
     case key: Event.Key =>
       key.keyEvent.code match {
-        case _: KeyCode.Esc  => quit = true
-        case _: KeyCode.Up   => modeUp()
-        case _: KeyCode.Down => modeDown()
+        case _: KeyCode.Esc => quit = true
+        case _: KeyCode.Up =>
+          modeUp()
+          Results.updateRows()
+        case _: KeyCode.Down =>
+          modeDown()
+          Results.updateRows()
         case c: KeyCode.Char =>
           mode match {
             case Mode.InputEdit  => FilterInput.addChar(c.c())
@@ -281,7 +302,8 @@ final class App(files: Array[FileInfo]) {
 
   def run(): Unit = withTerminal { (jni, terminal) =>
     FilterInput.update()
-    Results.update()
+    FormatOutput.update()
+    Results.updateMatches()
     while (!quit) {
       terminal.draw { f =>
         draw(f)

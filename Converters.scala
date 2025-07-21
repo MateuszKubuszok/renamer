@@ -4,6 +4,7 @@ import java.nio.file.Path
 import java.time.format.DateTimeFormatter
 import java.time.ZoneId
 import java.util.Locale
+import scala.collection.immutable.ListMap
 import scala.util.matching.Regex
 
 enum SubString {
@@ -59,16 +60,18 @@ enum Conversion {
   case Parent(substring: SubString)
   case GrandParent(substring: SubString)
   case Counter(from: Int, step: Int, digits: Int)
+  case Group(idx: Int)
   case Date(format: DateTimeFormatter)
   case Raw(pattern: String)
 
-  def apply(file: FileInfo, index: Int): String = this match {
+  def apply(file: FileInfo, index: Int, groups: Array[String]): String = this match {
     case NameExt(substring)                         => substring(file.nameExt)
     case Name(substring)                            => substring(file.name)
     case Ext(substring)                             => substring(file.extension)
     case Parent(substring)                          => substring(file.parent)
     case GrandParent(substring)                     => substring(file.grandParent)
     case Counter(from: Int, step: Int, digits: Int) => counter(from, step, digits, index)
+    case Group(idx)                                 => groups.applyOrElse(idx, _ => "")
     case Date(format)                               => format.format(file.date)
     case Raw(pattern)                               => pattern
   }
@@ -81,19 +84,26 @@ enum Conversion {
 }
 object Conversion {
 
-  private val lb = Regex.quote("[")
-  private val rb = Regex.quote("]")
+  private val dollar = Regex.quote("$")
+  private val lb     = Regex.quote("[")
+  private val rb     = Regex.quote("]")
 
-  private val placeholder = s"$lb([^\\[]+)$rb(.*)".r
-  private val raw         = s"([^\\[]+)(.*)".r
+  private val placeholder = s"$lb([^\\[\\$$]+)$rb(.*)".r
+  private val raw         = s"([^\\[\\$$]+)(.*)".r
 
-  private val counter = s"C(:-?[0-9]+)?(;-?[0-9]+)?(%[0-9]+)?".r
+  private val counter = "C(:-?[0-9]+)?(;-?[0-9]+)?(%[0-9]+)?".r
+
+  private val group = s"$dollar([0-9]+)(.*)".r
 
   def parseNext(s: String): Either[String, (Conversion, String)] = s match {
+    // $1 $12 $123 $1234, ...
+    case group(idx, rest) => Right(Group(idx.toInt) -> rest)
+    // [...]
     case placeholder(name, rest) =>
       SubString
         .parseNameWithSubString(name)
         .collect {
+          // [N] [N2-5] [N-2-5] [N2--5] [N2,5] [N-2,5],
           case ("N", substring) => Name(substring) -> rest
           case ("E", substring) => Ext(substring) -> rest
           case ("P", substring) => Parent(substring) -> rest
@@ -110,6 +120,7 @@ object Conversion {
               case Nil         => None
             }
           name match {
+            // [C] [C:10] [C:10;5] [C:10;5%3]
             case counter(from, step, digits) =>
               Some(
                 Right(
@@ -125,6 +136,7 @@ object Conversion {
         }
         .getOrElse {
           name match {
+            // [D:yyyy-MM-dd] [D:yyyy-MM-dd HH:mm:ss] [D:yyyy-MM-dd HH:mm:ss.SSS], ...
             case s"D:$format" =>
               try
                 Right(Date(DateTimeFormatter.ofPattern(format).withLocale(Locale.getDefault()).withZone(ZoneId.systemDefault())) -> rest)
@@ -141,18 +153,18 @@ object Conversion {
 
 sealed trait Converter {
 
-  def apply(file: FileInfo, index: Int): Path
+  def apply(file: FileInfo, index: Int, groups: Array[String]): Path
 }
 object Converter {
 
   case object Noop extends Converter {
-    def apply(file: FileInfo, counter: Int): Path = file.path
+    def apply(file: FileInfo, index: Int, groups: Array[String]): Path = file.path
   }
 
   final case class Parsed(conversions: Vector[Conversion]) extends Converter {
 
     import Conversion.*
-    def apply(file: FileInfo, index: Int): Path = Path.of(conversions.map(_(file, index)).mkString)
+    def apply(file: FileInfo, index: Int, groups: Array[String]): Path = Path.of(conversions.map(_(file, index, groups)).mkString + s"groups (${groups.toList})")
   }
 
   def parse(s: String): Either[String, Converter] = {

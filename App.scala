@@ -168,19 +168,25 @@ final class App(files: Array[FileInfo]) {
     final case class Match(
       input:  FileInfo,
       output: Path,
-      values: ListMap[String, String]
+      groups: Array[String]
     ) {
 
       def describe: String = s"Renaming: ${input.nameExt}  -> ${output.getFileName.toString}"
     }
 
     val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
-      files.filter(f => pattern.findFirstIn(f.name).isDefined).zipWithIndex.map { case (fi, index) =>
-        val counter = index + 1
-        val output  = converter(fi, counter)
-        // TODO: regex groups
-        Match(fi, output, ListMap.empty)
-      }
+      files.view
+        .flatMap { fi =>
+          pattern.findFirstMatchIn(fi.nameExt).map { m =>
+            fi -> (0 to m.groupCount).map(m.group(_)).toArray
+          }
+        }
+        .zipWithIndex
+        .map { case ((fi, groups), index) =>
+          val output = converter(fi, index, groups)
+          Match(fi, output, groups)
+        }
+        .toArray
     }
     val selected = Mode.current.map {
       case Mode.MatchPreview(selected) => Some(selected)

@@ -33,5 +33,6 @@ Run `renamer` in the directory you want to rename things, then
       * `[C:10;5]` - counter starting from `10` step by `5`
       * `[C:10;5%3]` - counter starting from `10` step by `5`, formatted with 3 digits
     * `[D:date formar]` - date formar following Java convention
+    * `$0`, `$1`, `$2` - groups from the regular expression match (the fist match!, use `^` and `$` if you want to match the whole line!)
  * check if there are no issues, if it's OK, accept rename with `Enter`
  * or abort with `Esc`

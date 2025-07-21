@@ -175,8 +175,9 @@ final class App(files: Array[FileInfo]) {
     }
 
     val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
-      files.filter(f => pattern.findFirstIn(f.name).isDefined).map { case fi @ FileInfo(name, path, file) =>
-        val output = converter(fi)
+      files.filter(f => pattern.findFirstIn(f.name).isDefined).zipWithIndex.map { case (fi, index) =>
+        val counter = index + 1
+        val output  = converter(fi, counter)
         // TODO: regex groups
         Match(fi, output, ListMap.empty)
       }

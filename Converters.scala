@@ -38,9 +38,9 @@ enum SubString {
 }
 object SubString {
 
-  private val from     = "(.*)(-?[0-9]+)-".r
-  private val fromTo   = "(.*)(-?[0-9]+)-(-?[0-9]+)".r
-  private val dropTake = "(.*)(-?[0-9]+),([0-9]+)".r
+  private val from     = "([NEPG]?)(-?[0-9]+)-".r
+  private val fromTo   = "([NEPG]?)(-?[0-9]+)-(-?[0-9]+)".r
+  private val dropTake = "([NEPG]?)(-?[0-9]+),([0-9]+)".r
   private val whole    = "([NEPG]?)".r
 
   def parseNameWithSubString(s: String): Option[(String, SubString)] = s match {
@@ -58,17 +58,25 @@ enum Conversion {
   case Ext(substring: SubString)
   case Parent(substring: SubString)
   case GrandParent(substring: SubString)
+  case Counter(from: Int, step: Int, digits: Int)
   case Date(format: DateTimeFormatter)
   case Raw(pattern: String)
 
-  def apply(file: FileInfo): String = this match {
-    case NameExt(substring)     => substring(file.nameExt)
-    case Name(substring)        => substring(file.name)
-    case Ext(substring)         => substring(file.extension)
-    case Parent(substring)      => substring(file.parent)
-    case GrandParent(substring) => substring(file.grandParent)
-    case Date(format)           => format.format(file.date)
-    case Raw(pattern)           => pattern
+  def apply(file: FileInfo, index: Int): String = this match {
+    case NameExt(substring)                         => substring(file.nameExt)
+    case Name(substring)                            => substring(file.name)
+    case Ext(substring)                             => substring(file.extension)
+    case Parent(substring)                          => substring(file.parent)
+    case GrandParent(substring)                     => substring(file.grandParent)
+    case Counter(from: Int, step: Int, digits: Int) => counter(from, step, digits, index)
+    case Date(format)                               => format.format(file.date)
+    case Raw(pattern)                               => pattern
+  }
+
+  private def counter(from: Int, step: Int, digits: Int, idx: Int): String = {
+    val value = from + step * idx
+    if (digits > 0) s"%0${digits}d".format(value)
+    else value.toString
   }
 }
 object Conversion {
@@ -78,6 +86,8 @@ object Conversion {
 
   private val placeholder = s"$lb([^\\[]+)$rb(.*)".r
   private val raw         = s"([^\\[]+)(.*)".r
+
+  private val counter = s"C(:-?[0-9]+)?(;-?[0-9]+)?(%[0-9]+)?".r
 
   def parseNext(s: String): Either[String, (Conversion, String)] = s match {
     case placeholder(name, rest) =>
@@ -91,6 +101,28 @@ object Conversion {
           case ("", substring)  => NameExt(substring) -> rest
         }
         .map(Right(_))
+        .orElse {
+          def parseNumber(string: String): Option[Int] =
+            // can be nullable!
+            (if (string != null) string.toList else Nil) match {
+              // first character should be dropped: :, ;, %
+              case _ :: number => Some(number.mkString.toInt)
+              case Nil         => None
+            }
+          name match {
+            case counter(from, step, digits) =>
+              Some(
+                Right(
+                  Counter(
+                    parseNumber(from).getOrElse(1),
+                    parseNumber(step).getOrElse(1),
+                    parseNumber(digits).getOrElse(0)
+                  ) -> rest
+                )
+              )
+            case _ => None
+          }
+        }
         .getOrElse {
           name match {
             case s"D:$format" =>
@@ -109,18 +141,18 @@ object Conversion {
 
 sealed trait Converter {
 
-  def apply(file: FileInfo): Path
+  def apply(file: FileInfo, index: Int): Path
 }
 object Converter {
 
   case object Noop extends Converter {
-    def apply(file: FileInfo): Path = file.path
+    def apply(file: FileInfo, counter: Int): Path = file.path
   }
 
   final case class Parsed(conversions: Vector[Conversion]) extends Converter {
 
     import Conversion.*
-    def apply(file: FileInfo): Path = Path.of(conversions.map(_(file)).mkString)
+    def apply(file: FileInfo, index: Int): Path = Path.of(conversions.map(_(file, index)).mkString)
   }
 
   def parse(s: String): Either[String, Converter] = {

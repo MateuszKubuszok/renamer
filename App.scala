@@ -184,6 +184,12 @@ final class App(files: Array[FileInfo]) {
         )
       }
     }
+    val validated = matches.map { values =>
+      val countByName = values.groupMapReduce(_.output.getFileName.toString)(_ => 1)(_ + _)
+      val duplicates  = countByName.filter(_._2 > 1).map(_._1).toVector.sorted
+      if (duplicates.isEmpty) Right(())
+      else Left("Duplicated names after rename: " + duplicates.mkString(", "))
+    }
 
     def headOption: Option[FileInfo] = matches.value.headOption.map(_.input)
 
@@ -234,8 +240,8 @@ final class App(files: Array[FileInfo]) {
 
   object Errors {
 
-    private val errors = ReactiveValue.from(FilterInput.parsedPattern, FormatOutput.parsedConverter) { (filter, converter) =>
-      filter.left.toOption.toVector ++ converter.left.toOption.toVector
+    private val errors = ReactiveValue.from(FilterInput.parsedPattern, FormatOutput.parsedConverter, Results.validated) { (filter, converter, validated) =>
+      filter.left.toOption.toVector ++ converter.left.toOption.toVector ++ validated.left.toOption.toVector
     }
 
     def render(parent: Frame, rect: Rect) = {

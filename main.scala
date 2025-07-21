@@ -1,6 +1,6 @@
 package renamer
 
-@main def main: Unit = {
+@main def main: Unit =
   // Vector(
   //   SubString.From(5) -> "abdc",
   //   SubString.From(5) -> "abcdefghijk",
@@ -24,4 +24,3 @@ package renamer
   // ).map(a => a -> Converter.parse(a)).foreach(println)
 
   App(FileInfo.fromPWD).run()
-}

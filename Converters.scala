@@ -164,7 +164,7 @@ object Converter {
   final case class Parsed(conversions: Vector[Conversion]) extends Converter {
 
     import Conversion.*
-    def apply(file: FileInfo, index: Int, groups: Array[String]): Path = Path.of(conversions.map(_(file, index, groups)).mkString + s"groups (${groups.toList})")
+    def apply(file: FileInfo, index: Int, groups: Array[String]): Path = Path.of(conversions.map(_(file, index, groups)).mkString)
   }
 
   def parse(s: String): Either[String, Converter] = {

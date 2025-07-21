@@ -402,7 +402,6 @@ final class App(files: Array[FileInfo]) {
         loop()
       case Mode.Execute(head, tail, done, total) =>
         terminal.draw(drawProgressBar(_, head.describe, done, total))
-        Thread.sleep(2000)
         executeNext(head, tail, done, total) match {
           case Some(exitCode) => exitCode
           case None           => loop()

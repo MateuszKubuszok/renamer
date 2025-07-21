@@ -2,9 +2,20 @@
 
 Simple TUI renamer app. Inspired by Total Commander's [multi rename tool](https://www.ghisler.ch/wiki/index.php/Multi-rename_tool).
 
+## Building
+
+```bash
+scala-cli --power package --native-image . -o renamer -- \
+  -H:IncludeResources=libnative-arm64-darwin-crossterm.dylib \
+  -H:IncludeResources=libnative-x86_64-darwin-crossterm.dylib \
+  -H:IncludeResources=libnative-x86_64-linux-crossterm.so \
+  -H:IncludeResources=native-x86_64-windows-crossterm.dll \
+  --no-fallback
+```
+
 ## Usage
 
-Run in the directory you want to rename things, then
+Run `renamer` in the directory you want to rename things, then
 
  * edit `Filter` to select which files to edit (it's a regular expression)
  * edit `Rename to` to define how files should be renamed, you can use the following magic placeholders:

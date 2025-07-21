@@ -227,7 +227,7 @@ final class App(files: Array[FileInfo]) {
             style = Style.DEFAULT
           )
         ),
-        widths = Array(Constraint.Percentage(50), Constraint.Length(30), Constraint.Min(10)),
+        widths = Array(Constraint.Percentage(40), Constraint.Min(25), Constraint.Percentage(40)),
         highlightStyle = Style(addModifier = Modifier.REVERSED),
         highlightSymbol = Some("*"),
         header = Some(header),

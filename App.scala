@@ -56,7 +56,7 @@ final class App(files: Array[FileInfo]) {
 
   private object FilterInput {
 
-    private val rawPattern = ReactiveVariable("")
+    val rawPattern = ReactiveVariable("")
     val parsedPattern = rawPattern.map { raw =>
       if (raw.isEmpty) Right(Regex(".*"))
       else
@@ -70,7 +70,7 @@ final class App(files: Array[FileInfo]) {
       case Right(pattern) => pattern
       case Left(_)        => Regex(".*")
     }
-    private val isSelected = mode.map {
+    val isSelected = mode.map {
       case Mode.InputEdit => true
       case _              => false
     }
@@ -105,15 +105,15 @@ final class App(files: Array[FileInfo]) {
     }
   }
 
-  object FormatOutput {
+  private object FormatOutput {
 
-    private val rawPattern = ReactiveVariable("")
-    val parsedConverter    = rawPattern.map(Converter.parse)
+    val rawPattern      = ReactiveVariable("")
+    val parsedConverter = rawPattern.map(Converter.parse)
     val converter = parsedConverter.map {
       case Right(converter) => converter
       case Left(_)          => Converter.Noop
     }
-    private val isSelected = mode.map {
+    val isSelected = mode.map {
       case Mode.OutputEdit => true
       case _               => false
     }
@@ -148,26 +148,26 @@ final class App(files: Array[FileInfo]) {
     }
   }
 
-  object Results {
+  private object Results {
 
-    final private case class Match(
+    final case class Match(
       input:  FileInfo,
       output: Path,
       values: ListMap[String, String]
     )
 
-    private val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
+    val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
       files.filter(f => pattern.findFirstIn(f.name).isDefined).map { case fi @ FileInfo(name, path, file) =>
         val output = converter(fi)
-        // TODO
+        // TODO: regex groups
         Match(fi, output, ListMap.empty)
       }
     }
-    private val isSelected = mode.map {
+    val isSelected = mode.map {
       case Mode.MatchPreview(_) => true
       case _                    => false
     }
-    private val rows = matches.map2(mode) { (matches, mode) =>
+    val rows = matches.map2(mode) { (matches, mode) =>
       val selectedFile = mode match {
         case Mode.MatchPreview(selected) => selected
         case _                           => null
@@ -240,7 +240,7 @@ final class App(files: Array[FileInfo]) {
 
   object Errors {
 
-    private val errors = ReactiveValue.from(FilterInput.parsedPattern, FormatOutput.parsedConverter, Results.validated) { (filter, converter, validated) =>
+    val errors = ReactiveValue.from(FilterInput.parsedPattern, FormatOutput.parsedConverter, Results.validated) { (filter, converter, validated) =>
       filter.left.toOption.toVector ++ converter.left.toOption.toVector ++ validated.left.toOption.toVector
     }
 
@@ -268,6 +268,21 @@ final class App(files: Array[FileInfo]) {
       parent.renderWidget(output, rect)
     }
   }
+
+  private def execute(): Unit =
+    if (Errors.errors.value.isEmpty) {
+      if (FormatOutput.rawPattern.value.nonEmpty) {
+        Results.matches.value.foreach { case Results.Match(input, output, values) =>
+          val in  = input.file
+          val out = output.toFile
+          if (in.exists() && !out.exists()) {
+            in.renameTo(out)
+          }
+        }
+      }
+
+      quit = true
+    }
 
   def draw(f: Frame): Unit = {
     val rects = Layout(
@@ -299,7 +314,7 @@ final class App(files: Array[FileInfo]) {
             case Mode.OutputEdit => FormatOutput.removeChar()
             case _               =>
           }
-        case _ =>
+        case _: KeyCode.Enter => execute()
       }
     case _ =>
   }

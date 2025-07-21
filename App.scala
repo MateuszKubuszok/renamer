@@ -181,15 +181,12 @@ final class App(files: Array[FileInfo]) {
         Match(fi, output, ListMap.empty)
       }
     }
-    val isSelected = Mode.current.map {
-      case Mode.MatchPreview(_) => true
-      case _                    => false
+    val selected = Mode.current.map {
+      case Mode.MatchPreview(selected) => Some(selected)
+      case _                           => None
     }
-    val rows = matches.map2(Mode.current) { (matches, mode) =>
-      val selectedFile = mode match {
-        case Mode.MatchPreview(selected) => selected
-        case _                           => null
-      }
+    val isSelected = selected.map(_.isDefined)
+    val rows = matches.map2(selected) { (matches, selectedFile) =>
       matches.map { case Match(input, output, values) =>
         TableWidget.Row(
           cells = Array(
@@ -198,7 +195,7 @@ final class App(files: Array[FileInfo]) {
             TableWidget.Cell(Text.nostyle(output.getFileName.toString))
           ),
           height = 1,
-          style = if (input == selectedFile) selectedStyle else Style.DEFAULT
+          style = if (selectedFile.contains(input)) selectedStyle.addModifier(Modifier.REVERSED) else Style.DEFAULT
         )
       }
     }
@@ -234,6 +231,16 @@ final class App(files: Array[FileInfo]) {
     private val state = TableWidget.State()
 
     def render(parent: Frame, rect: Rect) = {
+      val highlighedRowPos = selected.value.map(s => matches.value.indexWhere(r => r.input == s))
+
+      val shownRows = highlighedRowPos
+        .map { pos =>
+          val visibleRows = rect.height - 2 - 2 // 2 for borders, 2 for ???
+          val rowsSize    = matches.value.length
+          rows.value.drop(if (pos > visibleRows) pos - visibleRows else 0)
+        }
+        .getOrElse(rows.value)
+
       val filesTable = TableWidget(
         block = Some(
           BlockWidget(
@@ -249,7 +256,7 @@ final class App(files: Array[FileInfo]) {
         highlightStyle = Style(addModifier = Modifier.REVERSED),
         highlightSymbol = Some("*"),
         header = Some(header),
-        rows = rows.value
+        rows = shownRows
       )
 
       parent.renderStatefulWidget(filesTable, rect)(state)
@@ -318,6 +325,12 @@ final class App(files: Array[FileInfo]) {
             case _               =>
           }
         case _: KeyCode.Enter => Mode.execute()
+        case _ =>
+      }
+    case mouse: Event.Mouse =>
+      mouse.mouseEvent.kind match {
+        case _: MouseEventKind.ScrollUp   => Mode.up()
+        case _: MouseEventKind.ScrollDown => Mode.down()
         case _ =>
       }
     case _ =>

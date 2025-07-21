@@ -2,17 +2,17 @@ package renamer
 
 import java.io.File
 import java.nio.file.Path
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import scala.collection.immutable.ListMap
+import scala.util.boundary
+import scala.util.matching.Regex
 
 import tui.*
 import tui.crossterm.{ Color => _, * }
 import tui.widgets.*
-import scala.util.Try
-import scala.util.matching.Regex
 
 final class App(files: Array[FileInfo]) {
-
-  private var quit = false
 
   // Mode
 
@@ -20,32 +20,47 @@ final class App(files: Array[FileInfo]) {
     case InputEdit
     case OutputEdit
     case MatchPreview(selected: FileInfo)
+    case Execute(head: Results.Match, tail: List[Results.Match], done: Int, total: Int)
+    case Cancel
   }
+  private object Mode {
 
-  private val mode = ReactiveVariable(Mode.InputEdit)
+    val current = ReactiveVariable(Mode.InputEdit)
 
-  private def modeUp(): Unit = mode.value = mode.value match {
-    case Mode.InputEdit  => Mode.InputEdit
-    case Mode.OutputEdit => Mode.InputEdit
-    case Mode.MatchPreview(selected) =>
-      Results.previousMatch(selected) match {
-        case Some(prev) => Mode.MatchPreview(prev)
-        case None       => Mode.OutputEdit
-      }
-  }
+    def up(): Unit = current.value = current.value match {
+      case Mode.InputEdit  => Mode.InputEdit
+      case Mode.OutputEdit => Mode.InputEdit
+      case Mode.MatchPreview(selected) =>
+        Results.previousMatch(selected) match {
+          case Some(prev) => Mode.MatchPreview(prev)
+          case None       => Mode.OutputEdit
+        }
+      case mode => mode
+    }
 
-  private def modeDown(): Unit = mode.value = mode.value match {
-    case Mode.InputEdit => Mode.OutputEdit
-    case Mode.OutputEdit =>
-      Results.headOption match {
-        case Some(head) => Mode.MatchPreview(head)
-        case None       => Mode.OutputEdit
+    def down(): Unit = current.value = current.value match {
+      case Mode.InputEdit => Mode.OutputEdit
+      case Mode.OutputEdit =>
+        Results.headOption match {
+          case Some(head) => Mode.MatchPreview(head)
+          case None       => Mode.OutputEdit
+        }
+      case current @ Mode.MatchPreview(selected) =>
+        Results.nextMatch(selected) match {
+          case Some(next) => Mode.MatchPreview(next)
+          case None       => current
+        }
+      case mode => mode
+    }
+
+    def cancel(): Unit = current.value = Mode.Cancel
+
+    def execute(): Unit = if (Errors.errors.value.isEmpty && FormatOutput.rawPattern.value.nonEmpty) {
+      Results.matches.value.toList match {
+        case head :: tail => current.value = Mode.Execute(head, tail, 0, tail.length + 1)
+        case Nil          => current.value = Mode.Cancel
       }
-    case current @ Mode.MatchPreview(selected) =>
-      Results.nextMatch(selected) match {
-        case Some(next) => Mode.MatchPreview(next)
-        case None       => current
-      }
+    }
   }
 
   // UI
@@ -70,7 +85,7 @@ final class App(files: Array[FileInfo]) {
       case Right(pattern) => pattern
       case Left(_)        => Regex(".*")
     }
-    val isSelected = mode.map {
+    val isSelected = Mode.current.map {
       case Mode.InputEdit => true
       case _              => false
     }
@@ -113,7 +128,7 @@ final class App(files: Array[FileInfo]) {
       case Right(converter) => converter
       case Left(_)          => Converter.Noop
     }
-    val isSelected = mode.map {
+    val isSelected = Mode.current.map {
       case Mode.OutputEdit => true
       case _               => false
     }
@@ -154,7 +169,10 @@ final class App(files: Array[FileInfo]) {
       input:  FileInfo,
       output: Path,
       values: ListMap[String, String]
-    )
+    ) {
+
+      def describe: String = s"Renaming: ${input.nameExt}  -> ${output.getFileName.toString}"
+    }
 
     val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
       files.filter(f => pattern.findFirstIn(f.name).isDefined).map { case fi @ FileInfo(name, path, file) =>
@@ -163,11 +181,11 @@ final class App(files: Array[FileInfo]) {
         Match(fi, output, ListMap.empty)
       }
     }
-    val isSelected = mode.map {
+    val isSelected = Mode.current.map {
       case Mode.MatchPreview(_) => true
       case _                    => false
     }
-    val rows = matches.map2(mode) { (matches, mode) =>
+    val rows = matches.map2(Mode.current) { (matches, mode) =>
       val selectedFile = mode match {
         case Mode.MatchPreview(selected) => selected
         case _                           => null
@@ -176,7 +194,7 @@ final class App(files: Array[FileInfo]) {
         TableWidget.Row(
           cells = Array(
             TableWidget.Cell(Text.nostyle(input.nameExt)),
-            TableWidget.Cell(Text.nostyle(input.date.toString)),
+            TableWidget.Cell(Text.nostyle(input.date.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")))),
             TableWidget.Cell(Text.nostyle(output.getFileName.toString))
           ),
           height = 1,
@@ -269,22 +287,7 @@ final class App(files: Array[FileInfo]) {
     }
   }
 
-  private def execute(): Unit =
-    if (Errors.errors.value.isEmpty) {
-      if (FormatOutput.rawPattern.value.nonEmpty) {
-        Results.matches.value.foreach { case Results.Match(input, output, values) =>
-          val in  = input.file
-          val out = output.toFile
-          if (in.exists() && !out.exists()) {
-            in.renameTo(out)
-          }
-        }
-      }
-
-      quit = true
-    }
-
-  def draw(f: Frame): Unit = {
+  private def drawConfig(f: Frame): Unit = {
     val rects = Layout(
       direction = Direction.Vertical,
       constraints = Array(Constraint.Length(3), Constraint.Length(3), Constraint.Min(10), Constraint.Length(3)),
@@ -296,35 +299,98 @@ final class App(files: Array[FileInfo]) {
     Errors.render(f, rects(3))
   }
 
-  def handle(jni: CrosstermJni): Unit = jni.read() match {
+  def handleInput(jni: CrosstermJni): Unit = jni.read() match {
     case key: Event.Key =>
       key.keyEvent.code match {
-        case _: KeyCode.Esc  => quit = true
-        case _: KeyCode.Up   => modeUp()
-        case _: KeyCode.Down => modeDown()
+        case _: KeyCode.Esc  => Mode.cancel()
+        case _: KeyCode.Up   => Mode.up()
+        case _: KeyCode.Down => Mode.down()
         case c: KeyCode.Char =>
-          mode.value match {
+          Mode.current.value match {
             case Mode.InputEdit  => FilterInput.addChar(c.c())
             case Mode.OutputEdit => FormatOutput.addChar(c.c())
             case _               =>
           }
         case _: KeyCode.Backspace =>
-          mode.value match {
+          Mode.current.value match {
             case Mode.InputEdit  => FilterInput.removeChar()
             case Mode.OutputEdit => FormatOutput.removeChar()
             case _               =>
           }
-        case _: KeyCode.Enter => execute()
+        case _: KeyCode.Enter => Mode.execute()
+        case _ =>
       }
     case _ =>
   }
 
-  def run(): Unit = withTerminal { (jni, terminal) =>
-    while (!quit) {
-      terminal.draw { f =>
-        draw(f)
+  def drawProgressBar(f: Frame, current: String, done: Int, total: Int): Unit = {
+    val progress = done.toDouble / total.toDouble
+
+    val rects = Layout(
+      direction = Direction.Vertical,
+      constraints = Array(Constraint.Percentage(49), Constraint.Length(3)),
+      margin = Margin(1),
+      expandToFill = false
+    ).split(f.size)
+
+    val width = rects(0).width - 2
+    val bar   = "█" * (width * progress).toInt
+
+    val output = ParagraphWidget(
+      text = Text.nostyle(bar),
+      block = Some(
+        BlockWidget(
+          title = Some(Spans.nostyle(current)),
+          titleAlignment = Alignment.Left,
+          borders = Borders.ALL,
+          borderType = BlockWidget.BorderType.Rounded,
+          borderStyle = Style.DEFAULT,
+          style = Style.DEFAULT
+        )
+      ),
+      style = Style.DEFAULT,
+      wrap = None,
+      alignment = Alignment.Left
+    )
+
+    f.renderWidget(output, rects(1))
+  }
+
+  private def executeNext(head: Results.Match, tail: List[Results.Match], done: Int, total: Int): Option[Int] = {
+    val Results.Match(input, output, values) = head
+    val in                                   = input.file
+    val out                                  = output.toFile
+    if (!in.exists() || out.exists()) Some(1)
+    else if (!in.renameTo(out)) Some(-1)
+    else {
+      tail match {
+        case head :: tail =>
+          Mode.current.value = Mode.Execute(head, tail, done + 1, total)
+          None
+        case Nil =>
+          Some(0)
       }
-      handle(jni)
     }
+  }
+
+  def run(): Int = withTerminal { (jni, terminal) =>
+    @scala.annotation.tailrec
+    def loop(): Int = Mode.current.value match {
+      case Mode.InputEdit | Mode.OutputEdit | Mode.MatchPreview(_) =>
+        terminal.draw(drawConfig)
+        handleInput(jni)
+        loop()
+      case Mode.Execute(head, tail, done, total) =>
+        terminal.draw(drawProgressBar(_, head.describe, done, total))
+        Thread.sleep(2000)
+        executeNext(head, tail, done, total) match {
+          case Some(exitCode) => exitCode
+          case None           => loop()
+        }
+      case Mode.Cancel =>
+        0
+    }
+
+    loop()
   }
 }

@@ -2,6 +2,8 @@ package renamer
 
 import java.nio.file.Path
 import java.time.format.DateTimeFormatter
+import java.time.ZoneId
+import java.util.Locale
 import scala.util.matching.Regex
 
 enum SubString {
@@ -93,7 +95,7 @@ object Conversion {
           name match {
             case s"D:$format" =>
               try
-                Right(Date(DateTimeFormatter.ofPattern(format)) -> rest)
+                Right(Date(DateTimeFormatter.ofPattern(format).withLocale(Locale.getDefault()).withZone(ZoneId.systemDefault())) -> rest)
               catch {
                 case _: Throwable => Left(s"Invalid date format: $format")
               }

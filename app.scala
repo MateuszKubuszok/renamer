@@ -22,9 +22,9 @@ final class App(files: Array[FileInfo]) {
     case MatchPreview(selected: FileInfo)
   }
 
-  private var mode = Mode.InputEdit
+  private val mode = ReactiveVariable(Mode.InputEdit)
 
-  private def modeUp(): Unit = mode = mode match {
+  private def modeUp(): Unit = mode.value = mode.value match {
     case Mode.InputEdit  => Mode.InputEdit
     case Mode.OutputEdit => Mode.InputEdit
     case Mode.MatchPreview(selected) =>
@@ -34,7 +34,7 @@ final class App(files: Array[FileInfo]) {
       }
   }
 
-  private def modeDown(): Unit = mode = mode match {
+  private def modeDown(): Unit = mode.value = mode.value match {
     case Mode.InputEdit => Mode.OutputEdit
     case Mode.OutputEdit =>
       Results.headOption match {
@@ -54,57 +54,49 @@ final class App(files: Array[FileInfo]) {
   val selectedStyle = Style.DEFAULT.fg(Color.Blue).addModifier(Modifier.BOLD)
   val invalidStyle  = Style.DEFAULT.fg(Color.Red)
 
-  object FilterInput {
+  private object FilterInput {
 
-    private var rawPattern: String = ""
-    private var valid = true
-
-    var pattern: Regex = null
-
-    def addChar(c: Char): Unit = {
-      rawPattern += c
-      update()
+    private val rawPattern = ReactiveVariable("")
+    private val parsedPattern = rawPattern.map { raw =>
+      if (raw.isEmpty) Some(Regex(".*"))
+      else
+        try
+          Some(Regex(raw))
+        catch {
+          case _: Throwable => None
+        }
     }
+    val pattern = parsedPattern.map {
+      case Some(pattern) => pattern
+      case None          => Regex(".*")
+    }
+    private val isSelected = mode.map {
+      case Mode.InputEdit => true
+      case _              => false
+    }
+
+    def addChar(c: Char): Unit =
+      rawPattern.value += c
 
     def removeChar(): Unit =
-      if (rawPattern.nonEmpty) {
-        rawPattern = rawPattern.dropRight(1)
-        update()
+      if (rawPattern.value.nonEmpty) {
+        rawPattern.value = rawPattern.value.dropRight(1)
       }
-
-    def update(): Unit = {
-      if (rawPattern.isEmpty) {
-        pattern = Regex(".*")
-        valid = true
-      } else {
-        try {
-          pattern = Regex(rawPattern)
-          valid = true
-        } catch {
-          case _: Throwable =>
-            pattern = Regex(".*")
-            valid = false
-        }
-      }
-      Results.updateMatches()
-    }
-
-    private def isSelected = mode == Mode.InputEdit
 
     def render(parent: Frame, rect: Rect) = {
       val input = ParagraphWidget(
-        text = Text.nostyle(rawPattern),
+        text = Text.nostyle(rawPattern.value),
         block = Some(
           BlockWidget(
             title = Some(Spans.nostyle("Filter")),
             titleAlignment = Alignment.Left,
             borders = Borders.ALL,
             borderType = BlockWidget.BorderType.Rounded,
-            borderStyle = if (isSelected) selectedStyle else Style.DEFAULT,
+            borderStyle = if (isSelected.value) selectedStyle else Style.DEFAULT,
             style = Style.DEFAULT
           )
         ),
-        style = if (valid) Style.DEFAULT else invalidStyle,
+        style = if (parsedPattern.value.isDefined) Style.DEFAULT else invalidStyle,
         wrap = None,
         alignment = Alignment.Left
       )
@@ -115,55 +107,41 @@ final class App(files: Array[FileInfo]) {
 
   object FormatOutput {
 
-    private var rawPattern = ""
-    private var valid      = true
-
-    def addChar(c: Char): Unit = {
-      rawPattern += c
-      update()
+    private val rawPattern = ReactiveVariable("")
+    private val parsedConverter = rawPattern.map { raw =>
+      Converter.parse(raw).toOption
     }
+    val converter = parsedConverter.map {
+      case Some(converter) => converter
+      case None            => Converter.Noop
+    }
+    private val isSelected = mode.map {
+      case Mode.OutputEdit => true
+      case _               => false
+    }
+
+    def addChar(c: Char): Unit =
+      rawPattern.value += c
 
     def removeChar(): Unit =
-      if (rawPattern.nonEmpty) {
-        rawPattern = rawPattern.dropRight(1)
-        update()
+      if (rawPattern.value.nonEmpty) {
+        rawPattern.value = rawPattern.value.dropRight(1)
       }
-
-    var converter: Converter = Converter.Noop
-
-    def update(): Unit = {
-      if (rawPattern.isEmpty) {
-        converter = Converter.Noop
-        valid = true
-      } else {
-        Converter.parse(rawPattern) match {
-          case Right(converter) =>
-            this.converter = converter
-            valid = true
-          case Left(error) =>
-            this.converter = Converter.Noop
-            valid = false
-        }
-      }
-      Results.updateMatches()
-    }
-
-    def isSelected = mode == Mode.OutputEdit
 
     def render(parent: Frame, rect: Rect) = {
       val input = ParagraphWidget(
-        text = Text.nostyle(rawPattern),
+        text = Text.nostyle(rawPattern.value),
         block = Some(
           BlockWidget(
             title = Some(Spans.nostyle("Rename to")),
             titleAlignment = Alignment.Left,
             borders = Borders.ALL,
             borderType = BlockWidget.BorderType.Rounded,
-            borderStyle = if (isSelected) selectedStyle else Style.DEFAULT,
+            borderStyle = if (isSelected.value) selectedStyle else Style.DEFAULT,
             style = Style.DEFAULT
           )
         ),
-        style = Style.DEFAULT,
+        style = if (parsedConverter.value.isDefined) Style.DEFAULT else invalidStyle,
         wrap = None,
         alignment = Alignment.Left
       )
@@ -180,25 +158,43 @@ final class App(files: Array[FileInfo]) {
       values: ListMap[String, String]
     )
 
-    private var matches: Array[Match] = null
+    private val matches = FilterInput.pattern.map2(FormatOutput.converter) { (pattern, converter) =>
+      files.filter(f => pattern.findFirstIn(f.name).isDefined).map { case fi @ FileInfo(name, path, file) =>
+        val output = converter(fi)
+        // TODO
+        Match(fi, output, ListMap.empty)
+      }
+    }
+    private val isSelected = mode.map {
+      case Mode.MatchPreview(_) => true
+      case _                    => false
+    }
+    private val rows = matches.map2(mode) { (matches, mode) =>
+      val selectedFile = mode match {
+        case Mode.MatchPreview(selected) => selected
+        case _                           => null
+      }
+      matches.map { case Match(input, output, values) =>
+        TableWidget.Row(
+          cells = Array(TableWidget.Cell(Text.nostyle(input.nameExt)), TableWidget.Cell(Text.nostyle(output.getFileName.toString))),
+          height = 1,
+          style = if (input == selectedFile) selectedStyle else Style.DEFAULT
+        )
+      }
+    }
 
-    def headOption: Option[FileInfo] = matches.headOption.map(_.input)
+    def headOption: Option[FileInfo] = matches.value.headOption.map(_.input)
 
     def previousMatch(selected: FileInfo): Option[FileInfo] = {
-      val idx = matches.indexWhere(_.input == selected)
+      val idx = matches.value.indexWhere(_.input == selected)
       if (idx <= 0) None
-      else Some(matches(idx - 1).input)
+      else Some(matches.value(idx - 1).input)
     }
 
     def nextMatch(selected: FileInfo): Option[FileInfo] = {
-      val idx = matches.indexWhere(_.input == selected)
-      if (idx >= matches.length - 1) None
-      else Some(matches(idx + 1).input)
-    }
-
-    private def isSelected = mode match {
-      case Mode.MatchPreview(_) => true
-      case _                    => false
+      val idx = matches.value.indexWhere(_.input == selected)
+      if (idx >= matches.value.length - 1) None
+      else Some(matches.value(idx + 1).input)
     }
 
     private val header = TableWidget.Row(
@@ -207,35 +203,6 @@ final class App(files: Array[FileInfo]) {
         TableWidget.Cell(Text.from(Spans.styled("Renamed", headerStyle)))
       )
     )
-
-    private var rows: Array[TableWidget.Row] = null
-
-    def updateMatches(): Unit = {
-      matches = files
-        .filter(f => FilterInput.pattern.findFirstIn(f.name).isDefined)
-        .map { case fi @ FileInfo(name, path, file) =>
-          val output = FormatOutput.converter(fi)
-          // TODO
-          Match(fi, output, ListMap.empty)
-        }
-        .toArray
-      updateRows()
-    }
-
-    def updateRows(): Unit = {
-      val selectedFile = mode match {
-        case Mode.MatchPreview(selected) => selected
-        case _                           => null
-      }
-
-      rows = matches.map { case Match(input, output, values) =>
-        TableWidget.Row(
-          cells = Array(TableWidget.Cell(Text.nostyle(input.name)), TableWidget.Cell(Text.nostyle(output.toString))),
-          height = 1,
-          style = if (input == selectedFile) selectedStyle else Style.DEFAULT
-        )
-      }
-    }
 
     private val state = TableWidget.State()
 
@@ -247,7 +214,7 @@ final class App(files: Array[FileInfo]) {
             titleAlignment = Alignment.Left,
             borders = Borders.ALL,
             borderType = BlockWidget.BorderType.Rounded,
-            borderStyle = if (isSelected) selectedStyle else Style.DEFAULT,
+            borderStyle = if (isSelected.value) selectedStyle else Style.DEFAULT,
             style = Style.DEFAULT
           )
         ),
@@ -255,7 +222,7 @@ final class App(files: Array[FileInfo]) {
         highlightStyle = Style(addModifier = Modifier.REVERSED),
         highlightSymbol = Some("*"),
         header = Some(header),
-        rows = rows
+        rows = rows.value
       )
 
       parent.renderStatefulWidget(filesTable, rect)(state)
@@ -276,21 +243,17 @@ final class App(files: Array[FileInfo]) {
   def handle(jni: CrosstermJni): Unit = jni.read() match {
     case key: Event.Key =>
       key.keyEvent.code match {
-        case _: KeyCode.Esc => quit = true
-        case _: KeyCode.Up =>
-          modeUp()
-          Results.updateRows()
-        case _: KeyCode.Down =>
-          modeDown()
-          Results.updateRows()
+        case _: KeyCode.Esc  => quit = true
+        case _: KeyCode.Up   => modeUp()
+        case _: KeyCode.Down => modeDown()
         case c: KeyCode.Char =>
-          mode match {
+          mode.value match {
             case Mode.InputEdit  => FilterInput.addChar(c.c())
             case Mode.OutputEdit => FormatOutput.addChar(c.c())
             case _               =>
           }
         case _: KeyCode.Backspace =>
-          mode match {
+          mode.value match {
             case Mode.InputEdit  => FilterInput.removeChar()
             case Mode.OutputEdit => FormatOutput.removeChar()
             case _               =>
@@ -301,9 +264,6 @@ final class App(files: Array[FileInfo]) {
   }
 
   def run(): Unit = withTerminal { (jni, terminal) =>
-    FilterInput.update()
-    FormatOutput.update()
-    Results.updateMatches()
     while (!quit) {
       terminal.draw { f =>
         draw(f)

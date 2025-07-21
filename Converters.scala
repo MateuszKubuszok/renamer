@@ -8,6 +8,13 @@ enum SubString {
   case From(from: Int)
   case FromTo(from: Int, to: Int)
   case DropTake(drop: Int, take: Int)
+
+  def apply(s: String): String = this match {
+    case Whole                => s
+    case From(from)           => s.substring(from)
+    case FromTo(from, to)     => s.substring(from, to)
+    case DropTake(drop, take) => s.substring(drop, drop + take)
+  }
 }
 object SubString {
 
@@ -29,6 +36,16 @@ enum Conversion {
   case GrandParent(substring: SubString)
   case Date(format: DateTimeFormatter)
   case Raw(pattern: String)
+
+  def apply(file: FileInfo): String = this match {
+    case NameExt(substring)     => substring(file.nameExt)
+    case Name(substring)        => substring(file.name)
+    case Ext(substring)         => substring(file.extension)
+    case Parent(substring)      => substring(file.parent)
+    case GrandParent(substring) => substring(file.grandParent)
+    case Date(format)           => format.format(file.date)
+    case Raw(pattern)           => pattern
+  }
 }
 object Conversion {
 
@@ -73,8 +90,10 @@ object Converter {
     def apply(file: FileInfo): Path = file.path
   }
 
-  case class Parsed(conversions: Vector[Conversion]) extends Converter {
-    def apply(file: FileInfo): Path = file.path // TODO
+  final case class Parsed(conversions: Vector[Conversion]) extends Converter {
+
+    import Conversion.*
+    def apply(file: FileInfo): Path = Path.of(conversions.map(_(file)).mkString)
   }
 
   def parse(s: String): Either[String, Converter] = {

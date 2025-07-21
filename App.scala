@@ -57,18 +57,18 @@ final class App(files: Array[FileInfo]) {
   private object FilterInput {
 
     private val rawPattern = ReactiveVariable("")
-    private val parsedPattern = rawPattern.map { raw =>
-      if (raw.isEmpty) Some(Regex(".*"))
+    val parsedPattern = rawPattern.map { raw =>
+      if (raw.isEmpty) Right(Regex(".*"))
       else
         try
-          Some(Regex(raw))
+          Right(Regex(raw))
         catch {
-          case _: Throwable => None
+          case _: Throwable => Left(s"Invalid regex: $raw")
         }
     }
     val pattern = parsedPattern.map {
-      case Some(pattern) => pattern
-      case None          => Regex(".*")
+      case Right(pattern) => pattern
+      case Left(_)        => Regex(".*")
     }
     private val isSelected = mode.map {
       case Mode.InputEdit => true
@@ -96,7 +96,7 @@ final class App(files: Array[FileInfo]) {
             style = Style.DEFAULT
           )
         ),
-        style = if (parsedPattern.value.isDefined) Style.DEFAULT else invalidStyle,
+        style = if (parsedPattern.value.isRight) Style.DEFAULT else invalidStyle,
         wrap = None,
         alignment = Alignment.Left
       )
@@ -108,12 +108,10 @@ final class App(files: Array[FileInfo]) {
   object FormatOutput {
 
     private val rawPattern = ReactiveVariable("")
-    private val parsedConverter = rawPattern.map { raw =>
-      Converter.parse(raw).toOption
-    }
+    val parsedConverter    = rawPattern.map(Converter.parse)
     val converter = parsedConverter.map {
-      case Some(converter) => converter
-      case None            => Converter.Noop
+      case Right(converter) => converter
+      case Left(_)          => Converter.Noop
     }
     private val isSelected = mode.map {
       case Mode.OutputEdit => true
@@ -141,7 +139,7 @@ final class App(files: Array[FileInfo]) {
             style = Style.DEFAULT
           )
         ),
-        style = if (parsedConverter.value.isDefined) Style.DEFAULT else invalidStyle,
+        style = if (parsedConverter.value.isRight) Style.DEFAULT else invalidStyle,
         wrap = None,
         alignment = Alignment.Left
       )
@@ -176,7 +174,11 @@ final class App(files: Array[FileInfo]) {
       }
       matches.map { case Match(input, output, values) =>
         TableWidget.Row(
-          cells = Array(TableWidget.Cell(Text.nostyle(input.nameExt)), TableWidget.Cell(Text.nostyle(output.getFileName.toString))),
+          cells = Array(
+            TableWidget.Cell(Text.nostyle(input.nameExt)),
+            TableWidget.Cell(Text.nostyle(input.date.toString)),
+            TableWidget.Cell(Text.nostyle(output.getFileName.toString))
+          ),
           height = 1,
           style = if (input == selectedFile) selectedStyle else Style.DEFAULT
         )
@@ -200,6 +202,7 @@ final class App(files: Array[FileInfo]) {
     private val header = TableWidget.Row(
       cells = Array(
         TableWidget.Cell(Text.from(Spans.styled("Name", headerStyle))),
+        TableWidget.Cell(Text.from(Spans.styled("Date", headerStyle))),
         TableWidget.Cell(Text.from(Spans.styled("Renamed", headerStyle)))
       )
     )
@@ -229,15 +232,47 @@ final class App(files: Array[FileInfo]) {
     }
   }
 
+  object Errors {
+
+    private val errors = ReactiveValue.from(FilterInput.parsedPattern, FormatOutput.parsedConverter) { (filter, converter) =>
+      filter.left.toOption.toVector ++ converter.left.toOption.toVector
+    }
+
+    def render(parent: Frame, rect: Rect) = {
+      val style = if (errors.value.isEmpty) Style.DEFAULT else invalidStyle
+      val output = ParagraphWidget(
+        text =
+          if (errors.value.isEmpty) Text.nostyle("No issues")
+          else Text.from(Span.styled(errors.value.mkString(", "), invalidStyle)),
+        block = Some(
+          BlockWidget(
+            title = Some(Spans.nostyle("Issues")),
+            titleAlignment = Alignment.Left,
+            borders = Borders.ALL,
+            borderType = BlockWidget.BorderType.Rounded,
+            borderStyle = style,
+            style = style
+          )
+        ),
+        style = style,
+        wrap = None,
+        alignment = Alignment.Left
+      )
+
+      parent.renderWidget(output, rect)
+    }
+  }
+
   def draw(f: Frame): Unit = {
     val rects = Layout(
       direction = Direction.Vertical,
-      constraints = Array(Constraint.Length(3), Constraint.Length(3), Constraint.Min(10)),
+      constraints = Array(Constraint.Length(3), Constraint.Length(3), Constraint.Min(10), Constraint.Length(3)),
       margin = Margin(1)
     ).split(f.size)
     FilterInput.render(f, rects(0))
     FormatOutput.render(f, rects(1))
     Results.render(f, rects(2))
+    Errors.render(f, rects(3))
   }
 
   def handle(jni: CrosstermJni): Unit = jni.read() match {

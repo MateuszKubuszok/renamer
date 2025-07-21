@@ -2,6 +2,7 @@ package renamer
 
 import java.nio.file.Path
 import java.time.format.DateTimeFormatter
+import scala.util.matching.Regex
 
 enum SubString {
   case Whole
@@ -9,21 +10,42 @@ enum SubString {
   case FromTo(from: Int, to: Int)
   case DropTake(drop: Int, take: Int)
 
-  def apply(s: String): String = this match {
-    case Whole                => s
-    case From(from)           => s.substring(from)
-    case FromTo(from, to)     => s.substring(from, to)
-    case DropTake(drop, take) => s.substring(drop, drop + take)
+  def apply(s: String): String = {
+    def normalizeFrom(from: Int): Option[Int] =
+      if (from.abs > s.length) None
+      else Some((if (from < 0) s.length + from else from - 1).min(s.length - 1))
+    def normalizeTo(to: Int): Option[Int] =
+      if (to.abs >= s.length) None
+      else Some((if (to < 0) s.length + to else to).min(s.length))
+    this match {
+      case Whole => s
+      case From(from0) =>
+        normalizeFrom(from0).fold("")(s.substring(_))
+      case FromTo(from, to) =>
+        normalizeFrom(from).zip(normalizeTo(to)).map { case (from, to) => s.substring(from, to) }.getOrElse("")
+      case DropTake(drop, take) =>
+        normalizeFrom(drop)
+          .flatMap { from =>
+            val to = from + take
+            if (to > s.length) None
+            else Some(s.substring(from, to))
+          }
+          .getOrElse("")
+    }
   }
 }
 object SubString {
 
+  private val from     = "(.*)(-?[0-9]+)-".r
   private val fromTo   = "(.*)(-?[0-9]+)-(-?[0-9]+)".r
-  private val dropTake = "(.*)(-?[0-9]+),(-?[0-9]+)".r
+  private val dropTake = "(.*)(-?[0-9]+),([0-9]+)".r
+  private val whole    = "([NEPG]?)".r
 
   def parseNameWithSubString(s: String): Option[(String, SubString)] = s match {
+    case from(prefix, from)           => Some(prefix -> From(from.toInt))
     case fromTo(prefix, from, to)     => Some(prefix -> FromTo(from.toInt, to.toInt))
     case dropTake(prefix, drop, take) => Some(prefix -> DropTake(drop.toInt, take.toInt))
+    case whole(prefix)                => Some(prefix -> Whole)
     case _                            => None
   }
 }
@@ -49,8 +71,11 @@ enum Conversion {
 }
 object Conversion {
 
-  private val placeholder = "\\[([^\\]]+)\\](.*)".r
-  private val raw         = "([^\\[]+)(.*)".r
+  private val lb = Regex.quote("[")
+  private val rb = Regex.quote("]")
+
+  private val placeholder = s"$lb([^\\[]+)$rb(.*)".r
+  private val raw         = s"([^\\[]+)(.*)".r
 
   def parseNext(s: String): Either[String, (Conversion, String)] = s match {
     case placeholder(name, rest) =>
@@ -70,9 +95,9 @@ object Conversion {
               try
                 Right(Date(DateTimeFormatter.ofPattern(format)) -> rest)
               catch {
-                case _: Throwable => Left("Invalid date format")
+                case _: Throwable => Left(s"Invalid date format: $format")
               }
-            case _ => Left("Invalid placeholder format")
+            case _ => Left(s"Invalid placeholder format: $name")
           }
         }
     case raw(raw, rest) => Right(Raw(raw) -> rest)
